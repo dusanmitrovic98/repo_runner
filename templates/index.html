@@ -112,26 +112,29 @@
             document.getElementById('output').innerHTML = '';
         }
 
+        // Helper to get the active project name from the page
+        function getActiveProject() {
+            // Try to get from a hidden input, or from a JS variable, or from the DOM
+            // Here, we try to get it from a data attribute on the body or a global variable
+            // You may need to adjust this if your template changes
+            return window.activeProject || document.body.getAttribute('data-active-project') || '';
+        }
+
         // API Functions
         async function callAPI(endpoint, method = 'POST', formId = null) {
             clearOutput();
             updateOutput(`Processing: ${endpoint}...`, false);
-            
             try {
                 const formData = formId ? new FormData(document.getElementById(formId)) : null;
                 const response = await fetch(endpoint, {
                     method: method,
                     body: formData
                 });
-                
                 const result = await response.json();
                 if (response.status >= 400) {
                     updateOutput(`Error: ${result.error}`, true);
                 } else {
-                    updateOutput(result.message);
-                    if (result.output) {
-                        updateOutput(result.output);
-                    }
+                    updateOutput(result.message || 'Success', false);
                 }
             } catch (error) {
                 updateOutput(`Network error: ${error.message}`, true);
@@ -144,21 +147,41 @@
         }
 
         function deleteRepo() {
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
             if (confirm('Are you sure you want to delete the repository?')) {
-                callAPI('/delete_repo', 'POST');
+                callAPI(`/delete_repo/${project}`, 'POST');
             }
         }
 
         function recreateVenv() {
-            callAPI('/recreate_venv', 'POST');
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
+            callAPI(`/recreate_venv/${project}`, 'POST');
         }
 
         function runBuild() {
-            callAPI('/build', 'POST', 'build-form');
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
+            callAPI(`/build/${project}`, 'POST', 'build-form');
         }
 
         function startApp() {
-            callAPI('/start', 'POST', 'start-form');
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
+            callAPI(`/start/${project}`, 'POST', 'start-form');
         }
 
         function stopApp() {
@@ -166,11 +189,21 @@
         }
 
         function pullUpdates() {
-            callAPI('/pull', 'POST');
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
+            callAPI(`/pull/${project}`, 'POST');
         }
 
         function saveEnv() {
-            callAPI('/save_env', 'POST', 'env-form');
+            const project = getActiveProject();
+            if (!project) {
+                updateOutput('No active project selected.', true);
+                return;
+            }
+            callAPI(`/save_env/${project}`, 'POST', 'env-form');
         }
     </script>
 </body>
