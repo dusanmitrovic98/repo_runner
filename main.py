@@ -174,7 +174,19 @@ def run_command(cmd, project_name=None, cwd=None, env=None, use_venv=False, back
         result = subprocess.run(full_cmd, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
         return result
 
-# Routes
+# --- Single Project Mode Utilities ---
+def get_single_project():
+    """
+    Returns the only project in the repos directory, or None if not found.
+    """
+    if os.path.exists(REPOS_DIR):
+        projects = [name for name in os.listdir(REPOS_DIR)
+                    if os.path.isdir(os.path.join(REPOS_DIR, name))]
+        if projects:
+            return projects[0]
+    return None
+
+# --- Routes (Single Project Mode) ---
 @app.route('/')
 def index():
     projects = []
@@ -235,83 +247,79 @@ def clone_repo():
         app.logger.error(f"Clone error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/delete_repo/<project_name>', methods=['POST'])
-def delete_repo(project_name):
+@app.route('/delete_repo', methods=['POST'])
+def delete_repo():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to delete'}), 400
     try:
         repo_dir = get_repo_dir(project_name)
         if os.path.exists(repo_dir):
             shutil.rmtree(repo_dir)
-        
-        if session.get('active_project') == project_name:
-            session.pop('active_project')
-        
+        session.pop('active_project', None)
         return jsonify({'message': f'Repository {project_name} deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/recreate_venv/<project_name>', methods=['POST'])
-def recreate_venv(project_name):
+@app.route('/recreate_venv', methods=['POST'])
+def recreate_venv():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to recreate venv for'}), 400
     try:
         venv_path = get_venv_path(project_name)
         if os.path.exists(venv_path):
             shutil.rmtree(venv_path)
-        
         python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
         result = run_command(
-            f'{python_version} -m venv {venv_path}', 
+            f'{python_version} -m venv {venv_path}',
             project_name,
-            cwd=os.getcwd(), 
+            cwd=os.getcwd(),
             use_venv=False
         )
-        
         if result.returncode != 0:
             return jsonify({'error': f'Virtual environment creation failed: {result.stderr}'}), 500
-        
         req_file = os.path.join(get_repo_dir(project_name), 'requirements.txt')
         if os.path.exists(req_file):
             pip_cmd = f'pip install -r {req_file}'
             result = run_command(pip_cmd, project_name, use_venv=True)
             if result.returncode != 0:
                 return jsonify({'error': f'Dependency install failed: {result.stderr}'}), 500
-        
         return jsonify({'message': f'Virtual environment for {project_name} recreated'})
-    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/build/<project_name>', methods=['POST'])
-def run_build(project_name):
+@app.route('/build', methods=['POST'])
+def run_build():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to build'}), 400
     build_cmd = request.form.get('build_cmd')
     if not build_cmd:
         return jsonify({'error': 'Build command required'}), 400
-    
     try:
         config = load_project_config(project_name)
         config['build_cmd'] = build_cmd
         save_project_config(project_name, config)
-        
         result = run_command(build_cmd, project_name, use_venv=venv_exists(project_name))
         if result.returncode != 0:
             return jsonify({'error': f'Build failed: {result.stderr}'}), 500
-        
-        return jsonify({
-            'message': 'Build completed',
-            'output': result.stdout
-        })
+        return jsonify({'message': 'Build completed', 'output': result.stdout})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/start/<project_name>', methods=['POST'])
-def run_start(project_name):
+@app.route('/start', methods=['POST'])
+def run_start():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to start'}), 400
     start_cmd = request.form.get('start_cmd')
     if not start_cmd:
         return jsonify({'error': 'Start command required'}), 400
-    
     try:
         config = load_project_config(project_name)
         config['start_cmd'] = start_cmd
         save_project_config(project_name, config)
-        
         env = {}
         env_file = os.path.join(get_repo_dir(project_name), '.env')
         if os.path.exists(env_file):
@@ -320,10 +328,7 @@ def run_start(project_name):
                     if line.strip() and not line.startswith('#'):
                         key, value = line.strip().split('=', 1)
                         env[key] = value
-        
-        run_command(start_cmd, project_name, background=True, 
-                   env=env, use_venv=venv_exists(project_name))
-        
+        run_command(start_cmd, project_name, background=True, env=env, use_venv=venv_exists(project_name))
         return jsonify({'message': 'Application started'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -342,8 +347,11 @@ def stop_app():
             process_info = {"status": "stopped", "project": None}
     return jsonify({'message': 'Application stopped'})
 
-@app.route('/pull/<project_name>', methods=['POST'])
-def pull_updates(project_name):
+@app.route('/pull', methods=['POST'])
+def pull_updates():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to pull'}), 400
     try:
         result = run_command('git pull', project_name, use_venv=venv_exists(project_name))
         if result.returncode != 0:
@@ -352,18 +360,19 @@ def pull_updates(project_name):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/save_env/<project_name>', methods=['POST'])
-def save_env(project_name):
+@app.route('/save_env', methods=['POST'])
+def save_env():
+    project_name = session.get('active_project') or get_single_project()
+    if not project_name:
+        return jsonify({'error': 'No project to save env for'}), 400
     env_vars = request.form.get('env_vars', '')
     try:
         env_file = os.path.join(get_repo_dir(project_name), '.env')
         with open(env_file, 'w') as f:
             f.write(env_vars)
-        
         config = load_project_config(project_name)
         config['env_vars'] = env_vars
         save_project_config(project_name, config)
-        
         return jsonify({'message': 'Environment variables saved'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500

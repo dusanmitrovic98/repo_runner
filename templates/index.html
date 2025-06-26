@@ -112,14 +112,6 @@
             document.getElementById('output').innerHTML = '';
         }
 
-        // Helper to get the active project name from the page
-        function getActiveProject() {
-            // Try to get from a hidden input, or from a JS variable, or from the DOM
-            // Here, we try to get it from a data attribute on the body or a global variable
-            // You may need to adjust this if your template changes
-            return window.activeProject || document.body.getAttribute('data-active-project') || '';
-        }
-
         // API Functions
         async function callAPI(endpoint, method = 'POST', formId = null) {
             clearOutput();
@@ -147,41 +139,22 @@
         }
 
         function deleteRepo() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
+            if (!confirm('Are you sure you want to delete the repository?')) {
                 return;
             }
-            if (confirm('Are you sure you want to delete the repository?')) {
-                callAPI(`/delete_repo/${project}`, 'POST');
-            }
+            callAPI('/delete_repo', 'POST');
         }
 
         function recreateVenv() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
-                return;
-            }
-            callAPI(`/recreate_venv/${project}`, 'POST');
+            callAPI('/recreate_venv', 'POST');
         }
 
         function runBuild() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
-                return;
-            }
-            callAPI(`/build/${project}`, 'POST', 'build-form');
+            callAPI('/build', 'POST', 'build-form');
         }
 
         function startApp() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
-                return;
-            }
-            callAPI(`/start/${project}`, 'POST', 'start-form');
+            callAPI('/start', 'POST', 'start-form');
         }
 
         function stopApp() {
@@ -189,21 +162,11 @@
         }
 
         function pullUpdates() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
-                return;
-            }
-            callAPI(`/pull/${project}`, 'POST');
+            callAPI('/pull', 'POST');
         }
 
         function saveEnv() {
-            const project = getActiveProject();
-            if (!project) {
-                updateOutput('No active project selected.', true);
-                return;
-            }
-            callAPI(`/save_env/${project}`, 'POST', 'env-form');
+            callAPI('/save_env', 'POST', 'env-form');
         }
     </script>
 </body>
