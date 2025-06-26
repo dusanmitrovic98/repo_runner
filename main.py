@@ -9,6 +9,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import psutil
+from werkzeug.exceptions import HTTPException
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -423,6 +424,25 @@ def resource_usage():
         "cpu": psutil.cpu_percent(),
         "disk": psutil.disk_usage('/')._asdict()
     })
+
+# --- Global error handler to return JSON for all errors ---
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Pass through HTTP errors
+    if isinstance(e, HTTPException):
+        response = e.get_response()
+        # Replace the body with JSON
+        response.data = json.dumps({
+            "error": e.description,
+            "code": e.code
+        })
+        response.content_type = "application/json"
+        return response
+    # Non-HTTP exceptions
+    return jsonify({
+        "error": str(e),
+        "code": 500
+    }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
