@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os
 import subprocess
 import threading
+import signal  # Added for sending SIGINT
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,13 +18,14 @@ socketio = SocketIO(app)
 
 process_lock = threading.Lock()
 running_process = {'proc': None}
+current_cwd = os.getcwd()  # Track current working directory
 
 def kill_running_process():
     with process_lock:
         proc = running_process['proc']
         if proc and proc.poll() is None:
             try:
-                proc.terminate()
+                proc.send_signal(signal.SIGINT)  # Send SIGINT (Ctrl+C)
             except Exception:
                 pass
             running_process['proc'] = None
@@ -47,14 +49,32 @@ def terminal():
 
 @socketio.on('run_command')
 def handle_run_command(data):
+    global current_cwd
     command = data.get('command')
     if not command:
         emit('output', {'output': '\nNo command provided.'})
         return
+    # Handle 'cd' command specially
+    if command.strip().startswith('cd '):
+        parts = command.strip().split(maxsplit=1)
+        if len(parts) == 2:
+            new_dir = parts[1].strip('"')
+            try:
+                new_path = os.path.abspath(os.path.join(current_cwd, new_dir))
+                if os.path.isdir(new_path):
+                    current_cwd = new_path
+                    emit('output', {'output': f'Changed directory to {current_cwd}\n'})
+                else:
+                    emit('output', {'output': f'No such directory: {new_dir}\n'})
+            except Exception as e:
+                emit('output', {'output': f'Error changing directory: {e}\n'})
+        else:
+            emit('output', {'output': 'Usage: cd <directory>\n'})
+        return
     kill_running_process()  # Stop any previous process
     emit('output', {'output': f"\n$ {command}\n"})
     try:
-        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=current_cwd)
         with process_lock:
             running_process['proc'] = proc
         for line in proc.stdout:
