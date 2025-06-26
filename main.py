@@ -7,6 +7,10 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret')
 
+# --- Authentication Helper ---
+def is_authenticated():
+    return session.get('authenticated', False)
+
 # Global state for running process
 current_process = None
 process_lock = threading.Lock()
@@ -72,9 +76,11 @@ def run_command(cmd, cwd=None, env=None, background=False):
 
 @app.before_request
 def require_secret_key():
-    """Ensure SECRET_KEY is set before accessing dashboard"""
-    if request.endpoint != 'static' and not os.environ.get('SECRET_KEY'):
-        return "SECRET_KEY environment variable is required", 500
+    # Allow static files and login
+    if request.endpoint in ['static', 'login']:
+        return
+    if not is_authenticated():
+        return redirect(url_for('login'))
 
 @app.route('/')
 def index():
@@ -85,6 +91,23 @@ def index():
         start_cmd=session.get('start_cmd', ''),
         env_vars=session.get('env_vars', '')
     )
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        key = request.form.get('secret_key', '')
+        if key and key == os.environ.get('SECRET_KEY', 'dev-secret'):
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        else:
+            error = 'Invalid secret key.'
+    return render_template('login.html', error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
 
 @app.route('/clone', methods=['POST'])
 def clone_repo():

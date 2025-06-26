@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Repo Runner</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="bg-gray-900 text-gray-100 flex items-center justify-center min-h-screen">
+    <div class="bg-gray-800 rounded-lg p-8 shadow-lg w-full max-w-md">
+        <h1 class="text-2xl font-bold mb-6 text-center text-purple-400">Enter Secret Key</h1>
+        {% if error %}
+            <div class="mb-4 text-red-400 text-center">{{ error }}</div>
+        {% endif %}
+        <form method="post">
+            <input type="password" name="secret_key" placeholder="Secret Key" required autofocus
+                   class="w-full px-4 py-2 mb-4 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-purple-500">
+            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 py-2 rounded font-medium">Connect</button>
+        </form>
+    </div>
+</body>
+</html>
