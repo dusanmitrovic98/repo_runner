@@ -301,7 +301,8 @@ def run_build():
         config = load_project_config(project_name)
         config['build_cmd'] = build_cmd
         save_project_config(project_name, config)
-        result = run_command(build_cmd, project_name, use_venv=venv_exists(project_name))
+        # result = run_command(build_cmd, project_name, use_venv=venv_exists(project_name)) # TODO: Remove
+        result = run_command(build_cmd, project_name, use_venv=False)
         if result.returncode != 0:
             return jsonify({'error': f'Build failed: {result.stderr}'}), 500
         return jsonify({'message': 'Build completed', 'output': result.stdout})
@@ -328,7 +329,8 @@ def run_start():
                     if line.strip() and not line.startswith('#'):
                         key, value = line.strip().split('=', 1)
                         env[key] = value
-        run_command(start_cmd, project_name, background=True, env=env, use_venv=venv_exists(project_name))
+        # run_command(start_cmd, project_name, background=True, env=env, use_venv=venv_exists(project_name)) # TODO: Remove
+        run_command(start_cmd, project_name, background=True, env=env, use_venv=False)
         return jsonify({'message': 'Application started'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
