@@ -9,7 +9,7 @@ import threading
 load_dotenv()
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'changeme')
-PORT_MAIN = int(os.getenv('PORT_MAIN', 5000))
+PORT = int(os.getenv('PORT', 5001))
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -74,4 +74,4 @@ def handle_stop_command():
     socketio.emit('process_stopped')
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=PORT_MAIN, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=PORT, allow_unsafe_werkzeug=True)
