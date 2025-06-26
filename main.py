@@ -144,21 +144,21 @@ def run_command(cmd, project_name=None, cwd=None, env=None, use_venv=False, back
         env = os.environ.copy()
     if cwd is None and project_name:
         cwd = get_repo_dir(project_name)
-    
+
     if use_venv and venv_path:
         if os.name == 'nt':
             # Windows: use venv\Scripts\activate.bat
             activate = os.path.join(venv_path, 'Scripts', 'activate.bat')
             full_cmd = f'call "{activate}" && {cmd}'
-            shell=True
+            shell = True
         else:
-            # Unix: use source venv/bin/activate
+            # Unix: use . venv/bin/activate (not source)
             activate = os.path.join(venv_path, 'bin', 'activate')
-            full_cmd = f'source "{activate}" && {cmd}'
-            shell=True
+            full_cmd = f'. "{activate}" && {cmd}'
+            shell = True
     else:
         full_cmd = cmd
-        shell=True
+        shell = True
 
     if background:
         # For background processes, use Popen
