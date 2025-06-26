@@ -2,95 +2,26 @@ import os
 import subprocess
 import shutil
 import threading
+import time
+import json
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+import psutil
 
+# Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# --- Authentication Helper ---
-def is_authenticated():
-    return session.get('authenticated', False)
-
-# Global state for running process
-current_process = None
-process_lock = threading.Lock()
-
-# Project paths
-REPO_DIR = os.path.join(os.getcwd(), 'repo')
-VENVS_DIR = os.path.join(os.getcwd(), 'venvs')
-
-def get_project_name():
-    """Extract project name from repo URL"""
-    repo_url = session.get('repo_url', '')
-    if repo_url:
-        return repo_url.split('/')[-1].replace('.git', '')
-    return 'myproject'
-
-def get_venv_path():
-    """Get path to virtual environment"""
-    project_name = get_project_name()
-    return os.path.join(VENVS_DIR, project_name)
-
-def run_command(cmd, cwd=None, env=None, background=False):
-    """Run shell command with optional virtualenv activation"""
-    venv_path = get_venv_path()
-    
-    # Use virtualenv's Python on Unix
-    if os.name == 'posix':
-        python_bin = os.path.join(venv_path, 'bin', 'python')
-        cmd = f'{python_bin} -c "{cmd}"' if not cmd.startswith(python_bin) else cmd
-    
-    # Use virtualenv's Python on Windows
-    elif os.name == 'nt':
-        python_bin = os.path.join(venv_path, 'Scripts', 'python.exe')
-        cmd = f'{python_bin} -c "{cmd}"' if not cmd.startswith(python_bin) else cmd
-    
-    env_vars = os.environ.copy()
-    if env:
-        env_vars.update(env)
-    
-    if background:
-        global current_process
-        with process_lock:
-            if current_process:
-                current_process.terminate()
-            current_process = subprocess.Popen(
-                cmd, 
-                shell=True, 
-                cwd=cwd or REPO_DIR,
-                env=env_vars,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-        return None
-    else:
-        result = subprocess.run(
-            cmd, 
-            shell=True, 
-            cwd=cwd or REPO_DIR,
-            env=env_vars,
-            capture_output=True,
-            text=True
-        )
-        return result
-
+# --- Session-based Authentication ---
 @app.before_request
 def require_secret_key():
     # Allow static files and login
     if request.endpoint in ['static', 'login']:
         return
-    if not is_authenticated():
+    if not session.get('authenticated', False):
         return redirect(url_for('login'))
-
-@app.route('/')
-def index():
-    """Main dashboard view"""
-    return render_template('index.html', 
-        repo_url=session.get('repo_url', ''),
-        build_cmd=session.get('build_cmd', ''),
-        start_cmd=session.get('start_cmd', ''),
-        env_vars=session.get('env_vars', '')
-    )
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -109,102 +40,279 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
+# Configuration
+REPOS_DIR = os.path.join(os.getcwd(), 'repos')
+VENVS_DIR = os.path.join(os.getcwd(), 'venvs')
+CONFIG_FILE = os.path.join(os.getcwd(), 'projects.json')
+
+# Process management
+current_process = None
+process_lock = threading.Lock()
+process_info = {
+    "status": "stopped",
+    "start_time": None,
+    "pid": None,
+    "project": None
+}
+
+# Output management
+output_buffer = []
+output_lock = threading.Lock()
+
+# Logging configuration
+def configure_logging():
+    log_formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s %(message)s [in %(pathname)s:%(lineno)d]'
+    )
+    
+    file_handler = RotatingFileHandler('controller.log', maxBytes=100000, backupCount=3)
+    file_handler.setFormatter(log_formatter)
+    file_handler.setLevel(logging.INFO)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_formatter)
+    console_handler.setLevel(logging.DEBUG)
+    
+    app.logger.addHandler(file_handler)
+    app.logger.addHandler(console_handler)
+    app.logger.setLevel(logging.DEBUG)
+
+configure_logging()
+
+# --- Project Config and Name Utilities ---
+def get_project_name(repo_url):
+    """
+    Extracts a project name from the repo URL or path.
+    E.g. https://github.com/user/repo.git -> repo
+    """
+    name = repo_url.rstrip('/').split('/')[-1]
+    if name.endswith('.git'):
+        name = name[:-4]
+    return name
+
+def load_project_config(project_name):
+    """
+    Loads the project config from the CONFIG_FILE (projects.json).
+    Returns a dict, or an empty dict if not found.
+    """
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            all_configs = json.load(f)
+        return all_configs.get(project_name, {})
+    except Exception:
+        return {}
+
+def save_project_config(project_name, config):
+    """
+    Saves the project config to the CONFIG_FILE (projects.json).
+    """
+    all_configs = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                all_configs = json.load(f)
+        except Exception:
+            all_configs = {}
+    all_configs[project_name] = config
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(all_configs, f, indent=2)
+
+# Utility: Run a shell command, optionally in the project's venv
+def get_venv_path(project_name):
+    return os.path.join(VENVS_DIR, project_name)
+
+def get_repo_dir(project_name):
+    return os.path.join(REPOS_DIR, project_name)
+
+def venv_exists(project_name):
+    venv_path = get_venv_path(project_name)
+    if os.name == 'nt':
+        return os.path.exists(os.path.join(venv_path, 'Scripts', 'activate'))
+    else:
+        return os.path.exists(os.path.join(venv_path, 'bin', 'activate'))
+
+def run_command(cmd, project_name=None, cwd=None, env=None, use_venv=False, background=False):
+    """
+    Run a shell command, optionally activating the venv for the project.
+    Returns a subprocess.CompletedProcess (or Popen if background=True).
+    """
+    venv_path = get_venv_path(project_name) if (use_venv and project_name) else None
+    if env is None:
+        env = os.environ.copy()
+    if cwd is None and project_name:
+        cwd = get_repo_dir(project_name)
+    
+    if use_venv and venv_path:
+        if os.name == 'nt':
+            # Windows: use venv\Scripts\activate.bat
+            activate = os.path.join(venv_path, 'Scripts', 'activate.bat')
+            full_cmd = f'call "{activate}" && {cmd}'
+            shell=True
+        else:
+            # Unix: use source venv/bin/activate
+            activate = os.path.join(venv_path, 'bin', 'activate')
+            full_cmd = f'source "{activate}" && {cmd}'
+            shell=True
+    else:
+        full_cmd = cmd
+        shell=True
+
+    if background:
+        # For background processes, use Popen
+        global current_process, process_info
+        with process_lock:
+            current_process = subprocess.Popen(full_cmd, shell=shell, cwd=cwd, env=env)
+            process_info["status"] = "running"
+            process_info["start_time"] = time.time()
+            process_info["pid"] = current_process.pid
+            process_info["project"] = project_name
+        return current_process
+    else:
+        result = subprocess.run(full_cmd, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
+        return result
+
+# Routes
+@app.route('/')
+def index():
+    projects = []
+    if os.path.exists(REPOS_DIR):
+        projects = [name for name in os.listdir(REPOS_DIR) 
+                   if os.path.isdir(os.path.join(REPOS_DIR, name))]
+    
+    active_project = session.get('active_project', projects[0] if projects else None)
+    config = load_project_config(active_project) if active_project else {}
+    
+    return render_template('index.html', 
+        projects=projects,
+        active_project=active_project,
+        repo_url=config.get('repo_url', ''),
+        build_cmd=config.get('build_cmd', ''),
+        start_cmd=config.get('start_cmd', ''),
+        env_vars=config.get('env_vars', '')
+    )
+
 @app.route('/clone', methods=['POST'])
 def clone_repo():
-    """Clone repository endpoint"""
     repo_url = request.form.get('repo_url')
     if not repo_url:
         return jsonify({'error': 'Repository URL required'}), 400
     
+    if not (repo_url.startswith('http') or '@' in repo_url):
+        return jsonify({'error': 'Invalid repository URL'}), 400
+    
     try:
-        # Clear existing repo
-        if os.path.exists(REPO_DIR):
-            shutil.rmtree(REPO_DIR)
+        project_name = get_project_name(repo_url)
+        repo_dir = get_repo_dir(project_name)
         
-        # Clone new repo
-        result = run_command(f'git clone {repo_url} {REPO_DIR}', cwd=os.getcwd())
+        if os.path.exists(repo_dir):
+            shutil.rmtree(repo_dir)
+        
+        result = run_command(f'git clone {repo_url} {repo_dir}', 
+                            project_name, 
+                            cwd=os.getcwd(),
+                            use_venv=False)
+        
         if result.returncode != 0:
-            return jsonify({
-                'error': f'Clone failed: {result.stderr}'
-            }), 500
+            return jsonify({'error': f'Clone failed: {result.stderr}'}), 500
         
-        session['repo_url'] = repo_url
-        return jsonify({'message': 'Repository cloned successfully'})
+        session['active_project'] = project_name
+        save_project_config(project_name, {
+            'repo_url': repo_url,
+            'build_cmd': '',
+            'start_cmd': '',
+            'env_vars': ''
+        })
+        
+        return jsonify({
+            'message': 'Repository cloned successfully',
+            'project_name': project_name
+        })
     
     except Exception as e:
+        app.logger.error(f"Clone error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/delete_repo', methods=['POST'])
-def delete_repo():
-    """Delete repository endpoint"""
+@app.route('/delete_repo/<project_name>', methods=['POST'])
+def delete_repo(project_name):
     try:
-        if os.path.exists(REPO_DIR):
-            shutil.rmtree(REPO_DIR)
-        session.pop('repo_url', None)
-        return jsonify({'message': 'Repository deleted'})
+        repo_dir = get_repo_dir(project_name)
+        if os.path.exists(repo_dir):
+            shutil.rmtree(repo_dir)
+        
+        if session.get('active_project') == project_name:
+            session.pop('active_project')
+        
+        return jsonify({'message': f'Repository {project_name} deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/recreate_venv', methods=['POST'])
-def recreate_venv():
-    """Recreate virtual environment"""
+@app.route('/recreate_venv/<project_name>', methods=['POST'])
+def recreate_venv(project_name):
     try:
-        venv_path = get_venv_path()
-        
-        # Remove existing venv
+        venv_path = get_venv_path(project_name)
         if os.path.exists(venv_path):
             shutil.rmtree(venv_path)
         
-        # Create new venv
-        os.makedirs(VENVS_DIR, exist_ok=True)
-        run_command(f'python -m venv {venv_path}', cwd=os.getcwd())
+        python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        result = run_command(
+            f'{python_version} -m venv {venv_path}', 
+            project_name,
+            cwd=os.getcwd(), 
+            use_venv=False
+        )
         
-        # Install requirements
-        req_file = os.path.join(REPO_DIR, 'requirements.txt')
+        if result.returncode != 0:
+            return jsonify({'error': f'Virtual environment creation failed: {result.stderr}'}), 500
+        
+        req_file = os.path.join(get_repo_dir(project_name), 'requirements.txt')
         if os.path.exists(req_file):
             pip_cmd = f'pip install -r {req_file}'
-            result = run_command(pip_cmd)
+            result = run_command(pip_cmd, project_name, use_venv=True)
             if result.returncode != 0:
-                return jsonify({
-                    'error': f'Dependency install failed: {result.stderr}'
-                }), 500
+                return jsonify({'error': f'Dependency install failed: {result.stderr}'}), 500
         
-        return jsonify({'message': 'Virtual environment recreated'})
+        return jsonify({'message': f'Virtual environment for {project_name} recreated'})
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/build', methods=['POST'])
-def run_build():
-    """Run build command"""
+@app.route('/build/<project_name>', methods=['POST'])
+def run_build(project_name):
     build_cmd = request.form.get('build_cmd')
     if not build_cmd:
         return jsonify({'error': 'Build command required'}), 400
     
     try:
-        session['build_cmd'] = build_cmd
-        result = run_command(build_cmd)
+        config = load_project_config(project_name)
+        config['build_cmd'] = build_cmd
+        save_project_config(project_name, config)
+        
+        result = run_command(build_cmd, project_name, use_venv=venv_exists(project_name))
         if result.returncode != 0:
-            return jsonify({
-                'error': f'Build failed: {result.stderr}'
-            }), 500
-        return jsonify({'message': 'Build completed', 'output': result.stdout})
+            return jsonify({'error': f'Build failed: {result.stderr}'}), 500
+        
+        return jsonify({
+            'message': 'Build completed',
+            'output': result.stdout
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/start', methods=['POST'])
-def run_start():
-    """Start application"""
+@app.route('/start/<project_name>', methods=['POST'])
+def run_start(project_name):
     start_cmd = request.form.get('start_cmd')
     if not start_cmd:
         return jsonify({'error': 'Start command required'}), 400
     
     try:
-        session['start_cmd'] = start_cmd
+        config = load_project_config(project_name)
+        config['start_cmd'] = start_cmd
+        save_project_config(project_name, config)
         
-        # Load environment variables
         env = {}
-        env_file = os.path.join(REPO_DIR, '.env')
+        env_file = os.path.join(get_repo_dir(project_name), '.env')
         if os.path.exists(env_file):
             with open(env_file) as f:
                 for line in f:
@@ -212,47 +320,109 @@ def run_start():
                         key, value = line.strip().split('=', 1)
                         env[key] = value
         
-        run_command(start_cmd, background=True, env=env)
+        run_command(start_cmd, project_name, background=True, 
+                   env=env, use_venv=venv_exists(project_name))
+        
         return jsonify({'message': 'Application started'})
-    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/stop', methods=['POST'])
 def stop_app():
-    """Stop running application"""
-    global current_process
+    global current_process, process_info
     with process_lock:
         if current_process:
             current_process.terminate()
+            try:
+                current_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                current_process.kill()
             current_process = None
+            process_info = {"status": "stopped", "project": None}
     return jsonify({'message': 'Application stopped'})
 
-@app.route('/pull', methods=['POST'])
-def pull_updates():
-    """Pull latest changes"""
+@app.route('/pull/<project_name>', methods=['POST'])
+def pull_updates(project_name):
     try:
-        result = run_command('git pull')
+        result = run_command('git pull', project_name, use_venv=venv_exists(project_name))
         if result.returncode != 0:
-            return jsonify({
-                'error': f'Pull failed: {result.stderr}'
-            }), 500
+            return jsonify({'error': f'Pull failed: {result.stderr}'}), 500
         return jsonify({'message': 'Updates pulled', 'output': result.stdout})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/save_env', methods=['POST'])
-def save_env():
-    """Save environment variables"""
+@app.route('/save_env/<project_name>', methods=['POST'])
+def save_env(project_name):
     env_vars = request.form.get('env_vars', '')
     try:
-        env_file = os.path.join(REPO_DIR, '.env')
+        env_file = os.path.join(get_repo_dir(project_name), '.env')
         with open(env_file, 'w') as f:
             f.write(env_vars)
-        session['env_vars'] = env_vars
+        
+        config = load_project_config(project_name)
+        config['env_vars'] = env_vars
+        save_project_config(project_name, config)
+        
         return jsonify({'message': 'Environment variables saved'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/status')
+def get_status():
+    status = {"status": "stopped"}
+    with process_lock:
+        if current_process:
+            if current_process.poll() is None:
+                status = {
+                    "status": "running",
+                    "uptime": time.time() - process_info["start_time"],
+                    "pid": process_info["pid"],
+                    "project": process_info["project"]
+                }
+            else:
+                status = {"status": "stopped"}
+                current_process = None
+    return jsonify(status)
+
+@app.route('/output')
+def get_output():
+    project_name = request.args.get('project')
+    with output_lock:
+        if project_name:
+            output = [item for item in output_buffer if item[2] == project_name]
+        else:
+            output = output_buffer.copy()
+        output_buffer.clear()
+    return jsonify(output)
+
+@app.route('/projects')
+def list_projects():
+    projects = []
+    if os.path.exists(REPOS_DIR):
+        projects = [name for name in os.listdir(REPOS_DIR) 
+                   if os.path.isdir(os.path.join(REPOS_DIR, name))]
+    return jsonify(projects)
+
+@app.route('/switch_project/<project_name>')
+def switch_project(project_name):
+    session['active_project'] = project_name
+    return jsonify({'message': f'Switched to {project_name}'})
+
+@app.route('/health')
+def health_check():
+    return jsonify({
+        "status": "ok",
+        "timestamp": time.time(),
+        "version": "1.0"
+    })
+
+@app.route('/resources')
+def resource_usage():
+    return jsonify({
+        "memory": psutil.virtual_memory()._asdict(),
+        "cpu": psutil.cpu_percent(),
+        "disk": psutil.disk_usage('/')._asdict()
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
