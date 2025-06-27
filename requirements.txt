@@ -2,5 +2,5 @@ flask
 flask-socketio
 psutil
 python-dotenv
-pywinpty  # For Windows PTY support
-pywin32    # For Windows process management (optional, but recommended)
+pywinpty; sys_platform == "win32"  # For Windows PTY support
+pywin32; sys_platform == "win32"   # For Windows process management (optional)
