@@ -295,12 +295,16 @@ def handle_run_command(data):
                 else:
                     with process_lock:
                         running_processes[session_id]['proc'] = None  # PTY, so no proc object
+                    # Emit process_status running True for PTY
+                    socketio.emit('process_status', {'running': True, 'session_id': session_id})
                     read_pty(fd)
                     os.close(fd)
             elif os.name == 'nt' and pywinpty is not None:
                 # Use pywinpty for Windows PTY
                 winpty = pywinpty.PTY()
                 winpty.spawn(command, cwd=proc_info['cwd'])
+                # Emit process_status running True for pywinpty
+                socketio.emit('process_status', {'running': True, 'session_id': session_id})
                 while True:
                     data = winpty.read(1024)
                     if not data:
@@ -319,6 +323,8 @@ def handle_run_command(data):
                     proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], preexec_fn=os.setsid, bufsize=1, universal_newlines=True)
                 with process_lock:
                     running_processes[session_id]['proc'] = proc
+                # Emit process_status running True for subprocess
+                socketio.emit('process_status', {'running': True, 'session_id': session_id})
                 # Add a separator before each command output for clarity
                 for line in proc.stdout:
                     line = strip_ansi_codes(line)
@@ -338,6 +344,8 @@ def handle_run_command(data):
             with process_lock:
                 running_processes[session_id]['proc'] = None
             socketio.emit('process_stopped', {'session_id': session_id})
+            # Emit process_status running False after process stops
+            socketio.emit('process_status', {'running': False, 'session_id': session_id})
             save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
 
 @socketio.on('stop_command')
@@ -352,6 +360,8 @@ def handle_stop_command(data):
         os.remove(path)
     socketio.emit('command_output', {'output': '\n[Process stopped]\n', 'session_id': session_id})
     socketio.emit('process_stopped', {'session_id': session_id})
+    # Emit process_status running False after stop
+    socketio.emit('process_status', {'running': False, 'session_id': session_id})
 
 @socketio.on('send_command')
 def handle_send_command(data):

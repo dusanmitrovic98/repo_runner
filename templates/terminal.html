@@ -454,6 +454,22 @@
       // Optionally clear the input box
       commandInput.value = '';
     });
+
+    socket.on('process_status', function(data) {
+      const term = terminals.find(t => t.session_id === data.session_id);
+      if (term) {
+        term.running = data.running;
+        if (term.id === activeTerminal.id) {
+          stopBtn.disabled = !data.running;
+          runBtn.disabled = data.running;
+        }
+      }
+    });
+
+    stopBtn.addEventListener('click', function() {
+      if (!activeTerminal) return;
+      socket.emit('stop_command', { session_id: activeTerminal.session_id });
+    });
   </script>
 </body>
 </html>
