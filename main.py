@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import signal  # Added for sending SIGINT
+import sys  # Added for platform check
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,7 +26,10 @@ def kill_running_process():
         proc = running_process['proc']
         if proc and proc.poll() is None:
             try:
-                proc.send_signal(signal.SIGINT)  # Send SIGINT (Ctrl+C)
+                if os.name == 'nt':  # Windows
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                else:  # Unix
+                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
             except Exception:
                 pass
             running_process['proc'] = None
@@ -74,7 +78,10 @@ def handle_run_command(data):
     kill_running_process()  # Stop any previous process
     emit('output', {'output': f"\n$ {command}\n"})
     try:
-        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=current_cwd)
+        if os.name == 'nt':  # Windows
+            proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=current_cwd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        else:  # Unix
+            proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=current_cwd, preexec_fn=os.setsid)
         with process_lock:
             running_process['proc'] = proc
         for line in proc.stdout:
