@@ -33,7 +33,17 @@
       <button id="clear-history-btn" type="button">Clear History</button>
     </div>
   </div>
-
+  <!-- Rename Modal -->
+  <div id="rename-modal">
+    <div class="modal-content">
+      
+      <form id="rename-form" style="display:flex; flex-direction:row; gap:10px; align-items:center; margin-bottom:0;">
+        <input id="rename-input" style="margin-bottom: 0px;" type="text" maxlength="32" autocomplete="off" />
+        <button type="submit">Rename</button>
+        <button type="button" id="rename-cancel">Cancel</button>
+      </form>
+    </div>
+  </div>
   <script>
     const socket = io();
     // Log socket connection status
@@ -82,6 +92,19 @@
         // Reorder terminals array to match saved order
         terminals.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
       }
+    }
+
+    function saveTabNames() {
+      const nameMap = {};
+      terminals.forEach(t => { nameMap[t.id] = t.name; });
+      localStorage.setItem('terminalTabNames', JSON.stringify(nameMap));
+    }
+
+    function restoreTabNames() {
+      const nameMap = JSON.parse(localStorage.getItem('terminalTabNames') || '{}');
+      terminals.forEach(t => {
+        if (nameMap[t.id]) t.name = nameMap[t.id];
+      });
     }
 
     function createTerminal() {
@@ -149,12 +172,12 @@
         }
         terminalIdCounter = terminals.length + 1;
         restoreTabOrder(); // Restore order before setting active
+        restoreTabNames(); // Restore custom tab names
         // Restore active terminal if present
         const savedActiveId = localStorage.getItem('activeTerminalId');
         const found = terminals.find(t => t.id === savedActiveId);
         if (found) {
           setActiveTerminal(savedActiveId);
-          // Focus the command input for better UX
           setTimeout(() => commandInput.focus(), 0);
         } else {
           setActiveTerminal(terminals[0].id);
@@ -232,33 +255,16 @@
           if (fromIdx !== idx) {
             const moved = terminals.splice(fromIdx, 1)[0];
             terminals.splice(idx, 0, moved);
-            saveTabOrder(); // Save new order
+            saveTabOrder();
             renderTabs();
             setActiveTerminal(moved.id);
           }
         };
-        // Rename on double click
+        // Rename on double click (except close button)
         tab.ondblclick = (e) => {
+          if (e.target.classList.contains('tab-close')) return;
           e.stopPropagation();
-          const input = document.createElement('input');
-          input.type = 'text';
-          input.value = t.name;
-          input.className = 'tab-rename-input';
-          input.onblur = () => {
-            t.name = input.value.trim() || t.name;
-            renderTabs();
-          };
-          input.onkeydown = (ev) => {
-            if (ev.key === 'Enter') {
-              input.blur();
-            } else if (ev.key === 'Escape') {
-              renderTabs();
-            }
-          };
-          tab.textContent = '';
-          tab.appendChild(input);
-          input.focus();
-          input.select();
+          openRenameModal(t);
         };
         tab.onclick = () => setActiveTerminal(t.id);
         const closeBtn = document.createElement('span');
@@ -273,7 +279,7 @@
       addBtn.className = 'tab add';
       addBtn.onclick = () => { createTerminal(); saveTabOrder(); };
       tabsDiv.appendChild(addBtn);
-      saveTabOrder(); // Always save after rendering
+      saveTabOrder();
     }
 
     form.addEventListener('submit', function(e) {
@@ -364,6 +370,41 @@
         }
       });
     });
+
+    let renameTargetTab = null;
+    const renameModal = document.getElementById('rename-modal');
+    const renameForm = document.getElementById('rename-form');
+    const renameInput = document.getElementById('rename-input');
+    const renameCancel = document.getElementById('rename-cancel');
+
+    function openRenameModal(tab) {
+      renameTargetTab = tab;
+      renameInput.value = tab.name;
+      renameModal.classList.add('active');
+      setTimeout(() => renameInput.focus(), 0);
+    }
+    function closeRenameModal() {
+      renameModal.classList.remove('active');
+      renameTargetTab = null;
+    }
+    renameForm.onsubmit = function(e) {
+      e.preventDefault();
+      if (renameTargetTab) {
+        const newName = renameInput.value.trim();
+        if (newName) {
+          renameTargetTab.name = newName;
+          saveTabNames();
+          renderTabs();
+        }
+      }
+      closeRenameModal();
+    };
+    renameCancel.onclick = function() {
+      closeRenameModal();
+    };
+    renameInput.onkeydown = function(e) {
+      if (e.key === 'Escape') closeRenameModal();
+    };
   </script>
 </body>
 </html>
