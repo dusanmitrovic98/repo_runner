@@ -45,27 +45,59 @@ running_processes = {}  # session_id -> {'proc': ..., 'cwd': ..., 'output_buffer
 def kill_running_process(session_id):
     with process_lock:
         proc_info = running_processes.get(session_id)
-        if proc_info and proc_info['proc'] and proc_info['proc'].poll() is None:
+        proc = proc_info['proc'] if proc_info else None
+        if proc and proc.poll() is None:
             try:
-                parent = psutil.Process(proc_info['proc'].pid)
-                children = parent.children(recursive=True)
-                for child in children:
+                if os.name == 'nt':
+                    # Windows: try to send CTRL_BREAK_EVENT to the process group
                     try:
-                        child.terminate()
-                    except psutil.NoSuchProcess:
+                        proc.send_signal(signal.CTRL_BREAK_EVENT)
+                        time.sleep(0.5)
+                    except Exception:
                         pass
-                time.sleep(0.5)
-                for child in children:
                     try:
-                        if child.is_running():
-                            child.kill()
-                    except psutil.NoSuchProcess:
+                        proc.terminate()
+                        time.sleep(0.5)
+                    except Exception:
                         pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                else:
+                    # Unix: kill the whole process group
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+                # Also try psutil fallback for any remaining children
                 try:
-                    parent.kill()
+                    parent = psutil.Process(proc.pid)
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        try:
+                            child.terminate()
+                        except psutil.NoSuchProcess:
+                            pass
+                    time.sleep(0.5)
+                    for child in children:
+                        try:
+                            if child.is_running():
+                                child.kill()
+                        except psutil.NoSuchProcess:
+                            pass
+                    try:
+                        parent.kill()
+                    except psutil.NoSuchProcess:
+                        pass
                 except psutil.NoSuchProcess:
                     pass
-            except psutil.NoSuchProcess:
+            except Exception:
                 pass
             finally:
                 running_processes[session_id]['proc'] = None
