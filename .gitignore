@@ -76,3 +76,5 @@ coverage.xml
 
 # Project-specific
 repo/
+
+data/

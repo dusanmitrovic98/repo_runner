@@ -282,6 +282,38 @@
       saveTabOrder();
     }
 
+    // Keyboard up/down for command history
+    commandInput.addEventListener('keydown', function(e) {
+      if (!activeTerminal) return;
+      if (e.key === 'ArrowUp') {
+        if (activeTerminal.history.length > 0) {
+          if (activeTerminal.historyIndex > 0) {
+            activeTerminal.historyIndex--;
+            commandInput.value = activeTerminal.history[activeTerminal.historyIndex];
+          } else if (activeTerminal.historyIndex === 0) {
+            // Already at oldest, do nothing
+          } else {
+            // If index is -1 (fresh), go to last
+            activeTerminal.historyIndex = activeTerminal.history.length - 1;
+            commandInput.value = activeTerminal.history[activeTerminal.historyIndex];
+          }
+        }
+        e.preventDefault();
+      } else if (e.key === 'ArrowDown') {
+        if (activeTerminal.history.length > 0) {
+          if (activeTerminal.historyIndex < activeTerminal.history.length - 1) {
+            activeTerminal.historyIndex++;
+            commandInput.value = activeTerminal.history[activeTerminal.historyIndex];
+          } else {
+            // At latest, clear input
+            activeTerminal.historyIndex = activeTerminal.history.length;
+            commandInput.value = '';
+          }
+        }
+        e.preventDefault();
+      }
+    });
+
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       if (!activeTerminal) return;
@@ -296,6 +328,11 @@
         return;
       }
       if (!activeTerminal.running) {
+        // Add to history if not empty and not duplicate of last
+        if (cmd && (activeTerminal.history.length === 0 || activeTerminal.history[activeTerminal.history.length - 1] !== cmd)) {
+          activeTerminal.history.push(cmd);
+        }
+        activeTerminal.historyIndex = activeTerminal.history.length;
         socket.emit('send_command', { session_id: activeTerminal.session_id, command: cmd });
         commandInput.value = '';
       } else {
@@ -405,6 +442,14 @@
     renameInput.onkeydown = function(e) {
       if (e.key === 'Escape') closeRenameModal();
     };
+
+    clearHistoryBtn.addEventListener('click', function() {
+      if (!activeTerminal) return;
+      activeTerminal.history = [];
+      activeTerminal.historyIndex = -1;
+      // Optionally clear the input box
+      commandInput.value = '';
+    });
   </script>
 </body>
 </html>
