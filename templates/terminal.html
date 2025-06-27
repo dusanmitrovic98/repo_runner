@@ -71,6 +71,19 @@
       terminals.forEach(t => t.restored = false);
     }
 
+    function saveTabOrder() {
+      const order = terminals.map(t => t.id);
+      localStorage.setItem('terminalTabOrder', JSON.stringify(order));
+    }
+
+    function restoreTabOrder() {
+      const order = JSON.parse(localStorage.getItem('terminalTabOrder') || '[]');
+      if (order.length > 0) {
+        // Reorder terminals array to match saved order
+        terminals.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      }
+    }
+
     function createTerminal() {
       // Find the lowest available terminal number
       const usedNumbers = terminals.map(t => parseInt(t.id.split('-')[1], 10)).sort((a, b) => a - b);
@@ -95,6 +108,7 @@
         restored: false
       };
       terminals.push(terminal);
+      saveTabOrder();
       setActiveTerminal(id);
       renderTabs();
       // Only reconnect ONCE, not on every tab switch
@@ -134,6 +148,7 @@
           });
         }
         terminalIdCounter = terminals.length + 1;
+        restoreTabOrder(); // Restore order before setting active
         // Restore active terminal if present
         const savedActiveId = localStorage.getItem('activeTerminalId');
         const found = terminals.find(t => t.id === savedActiveId);
@@ -151,6 +166,7 @@
       } else {
         // If no terminals, create one and persist as active
         createTerminal();
+        saveTabOrder();
         localStorage.setItem('activeTerminalId', terminals[0].id);
         setTimeout(() => commandInput.focus(), 0);
       }
@@ -168,6 +184,7 @@
         socket.emit('stop_command', { session_id });
         // Remove from terminals array
         terminals.splice(idx, 1);
+        saveTabOrder();
         // If closing the active terminal, update persisted active terminal
         if (activeTerminal && activeTerminal.id === id) {
           if (terminals.length > 0) setActiveTerminal(terminals[0].id);
@@ -215,6 +232,7 @@
           if (fromIdx !== idx) {
             const moved = terminals.splice(fromIdx, 1)[0];
             terminals.splice(idx, 0, moved);
+            saveTabOrder(); // Save new order
             renderTabs();
             setActiveTerminal(moved.id);
           }
@@ -253,8 +271,9 @@
       const addBtn = document.createElement('button');
       addBtn.textContent = '+';
       addBtn.className = 'tab add';
-      addBtn.onclick = createTerminal;
+      addBtn.onclick = () => { createTerminal(); saveTabOrder(); };
       tabsDiv.appendChild(addBtn);
+      saveTabOrder(); // Always save after rendering
     }
 
     form.addEventListener('submit', function(e) {

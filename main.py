@@ -12,6 +12,7 @@ import atexit  # Add this import at the top
 from collections import deque  # Add this import for output buffering
 import json  # Add this import for JSON persistence
 import platform  # Add this import for platform checks
+import re  # Add this import for stripping ANSI codes
 try:
     import pty  # Unix PTY support
 except ImportError:
@@ -146,11 +147,15 @@ def handle_reconnect_session(data):
             output_buffer, cwd = load_session_buffer(session_id)
             running_processes[session_id] = {'proc': None, 'cwd': cwd, 'output_buffer': output_buffer}
             proc_info = running_processes[session_id]
-        # Send buffered output
         output_buffer = proc_info.get('output_buffer', deque())
+        # Only emit prompt if there is no command history
+        if not output_buffer or len(output_buffer) == 0:
+            prompt = f"\n{proc_info['cwd']}\n$ "  # Always use $ for prompt
+            emit('command_output', {'output': prompt, 'session_id': session_id})
+        # Send buffered output
         for entry in output_buffer:
             if isinstance(entry, dict):
-                prompt = f"\n{entry['cwd']}\n$ {entry['command']}\n" if entry['command'] else ''
+                prompt = f"\n{entry['cwd']}\n$ {entry['command']}\n" if entry['command'] else ''  # Always use $
                 if prompt:
                     emit('command_output', {'output': prompt, 'session_id': session_id})
                 if entry['output']:
@@ -180,6 +185,10 @@ def terminal():
         return redirect(url_for('login'))
     return render_template('terminal.html')
 
+def strip_ansi_codes(text):
+    ansi_escape = re.compile(r'\x1B\[[0-9;?]*[ -/]*[@-~]')
+    return ansi_escape.sub('', text)
+
 @socketio.on('run_command')
 def handle_run_command(data):
     print('[SocketIO] Event: run_command', data, flush=True)
@@ -196,9 +205,14 @@ def handle_run_command(data):
         if session_id not in running_processes:
             output_buffer, cwd = load_session_buffer(session_id)
             running_processes[session_id] = {'proc': None, 'cwd': cwd, 'output_buffer': output_buffer}
+            proc_info = running_processes[session_id]
+            # Do NOT emit prompt here; prompt will be emitted with the command below
         proc_info = running_processes[session_id]
         if 'output_buffer' not in proc_info:
             proc_info['output_buffer'] = deque(maxlen=OUTPUT_BUFFER_SIZE)
+        # If this is the first command (buffer is empty), clear output in frontend
+        if not proc_info['output_buffer'] or len(proc_info['output_buffer']) == 0:
+            emit('clear_output', {'session_id': session_id})
     # Handle 'cls' and 'clear' commands
     if command.strip() in ['cls', 'clear']:
         print('[Terminal] Handling clear/cls command', flush=True)
@@ -211,6 +225,9 @@ def handle_run_command(data):
         proc_info['output_buffer'], _ = load_session_buffer(session_id)
         print(f'[Terminal] Buffer after clear: {list(proc_info["output_buffer"])}', flush=True)
         emit('clear_output', {'session_id': session_id})
+        # Emit prompt after clear
+        prompt = f"\n{proc_info['cwd']}\n$ "
+        emit('command_output', {'output': prompt, 'session_id': session_id})
         socketio.emit('process_stopped', {'session_id': session_id})
         return
     # Handle 'cd' command specially
@@ -223,21 +240,26 @@ def handle_run_command(data):
                 new_path = os.path.abspath(os.path.join(proc_info['cwd'], new_dir))
                 if os.path.isdir(new_path):
                     proc_info['cwd'] = new_path
-                    msg = f'Changed directory to {proc_info["cwd"]}\n'
-                    proc_info['output_buffer'].append(msg)
-                    emit('output', {'output': msg, 'session_id': session_id})
+                    msg = f''
+                    # Store as a dict for consistent replay
+                    proc_info['output_buffer'].append({'cwd': proc_info['cwd'], 'command': command, 'output': msg})
+                    emit('command_output', {'output': f"\n{proc_info['cwd']}\n$ {command}\n", 'session_id': session_id})  # Always use $
+                    emit('command_output', {'output': msg, 'session_id': session_id})
                 else:
                     msg = f'No such directory: {new_dir}\n'
-                    proc_info['output_buffer'].append(msg)
-                    emit('output', {'output': msg, 'session_id': session_id})
+                    proc_info['output_buffer'].append({'cwd': proc_info['cwd'], 'command': command, 'output': msg})
+                    emit('command_output', {'output': f"\n{proc_info['cwd']}\n$ {command}\n", 'session_id': session_id})  # Always use $
+                    emit('command_output', {'output': msg, 'session_id': session_id})
             except Exception as e:
                 msg = f'Error changing directory: {e}\n'
-                proc_info['output_buffer'].append(msg)
-                emit('output', {'output': msg, 'session_id': session_id})
+                proc_info['output_buffer'].append({'cwd': proc_info['cwd'], 'command': command, 'output': msg})
+                emit('command_output', {'output': f"\n{proc_info['cwd']}\n$ {command}\n", 'session_id': session_id})  # Always use $
+                emit('command_output', {'output': msg, 'session_id': session_id})
         else:
             msg = 'Usage: cd <directory>\n'
-            proc_info['output_buffer'].append(msg)
-            emit('output', {'output': msg, 'session_id': session_id})
+            proc_info['output_buffer'].append({'cwd': proc_info['cwd'], 'command': command, 'output': msg})
+            emit('command_output', {'output': f"\n{proc_info['cwd']}\n$ {command}\n", 'session_id': session_id})  # Always use $
+            emit('command_output', {'output': msg, 'session_id': session_id})
         save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
         socketio.emit('process_stopped', {'session_id': session_id})  # Ensure frontend is reset
         return
@@ -260,6 +282,7 @@ def handle_run_command(data):
                             if not data:
                                 break
                             text = data.decode(errors='replace')
+                            text = strip_ansi_codes(text)
                             entry['output'] += text
                             emit('command_output', {'output': text, 'session_id': session_id})
                             save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
@@ -283,6 +306,7 @@ def handle_run_command(data):
                     if not data:
                         break
                     text = data.decode(errors='replace') if isinstance(data, bytes) else data
+                    text = strip_ansi_codes(text)
                     entry['output'] += text
                     emit('command_output', {'output': text, 'session_id': session_id})
                     save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
@@ -290,17 +314,20 @@ def handle_run_command(data):
             else:
                 # Fallback: normal subprocess (may be buffered)
                 if os.name == 'nt':  # Windows
-                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, bufsize=1, universal_newlines=True)
                 else:  # Unix
-                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], preexec_fn=os.setsid)
+                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], preexec_fn=os.setsid, bufsize=1, universal_newlines=True)
                 with process_lock:
                     running_processes[session_id]['proc'] = proc
+                # Add a separator before each command output for clarity
                 for line in proc.stdout:
+                    line = strip_ansi_codes(line)
                     print('[Terminal] Output:', line.strip(), flush=True)
                     entry['output'] += line
                     emit('command_output', {'output': line, 'session_id': session_id})
                     save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
-                proc.wait()
+                proc.wait()  # Ensure process is finished before next command
+                save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
         except Exception as e:
             msg = f'Error: {e}\n'
             print('[Terminal] Exception:', e, flush=True)
