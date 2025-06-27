@@ -1,1 +1,0 @@
-{"output_buffer": [{"cwd": "D:\\workstation\\repo_runner", "command": "ls", "output": "activate.bat\nactivate.sh\ndata\ndeactivate.bat\ndeactivate.sh\nLICENSE\nmain.py\nprojects-requirements\nREADME.md\nrequirements.txt\nstatic\ntemplates\ntest\n"}, {"cwd": "D:\\workstation\\repo_runner", "command": "echo hello", "output": "hello\n"}], "cwd": "D:\\workstation\\repo_runner"}

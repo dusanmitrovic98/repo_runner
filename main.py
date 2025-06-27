@@ -11,6 +11,15 @@ import psutil  # Add this new import
 import atexit  # Add this import at the top
 from collections import deque  # Add this import for output buffering
 import json  # Add this import for JSON persistence
+import platform  # Add this import for platform checks
+try:
+    import pty  # Unix PTY support
+except ImportError:
+    pty = None
+try:
+    import pywinpty  # Windows PTY support
+except ImportError:
+    pywinpty = None
 
 # Load environment variables from .env file
 load_dotenv()
@@ -236,26 +245,62 @@ def handle_run_command(data):
     else:
         print('[Terminal] Running command:', command, 'in', proc_info['cwd'], flush=True)
         kill_running_process(session_id)  # Stop any previous process for this session
-        # Store each command as a dict with cwd, command, and output
         entry = {'cwd': proc_info['cwd'], 'command': command, 'output': ''}
         proc_info['output_buffer'].append(entry)
-        # Emit the prompt line with cwd and command
         prompt = f"\n{entry['cwd']}\n$ {entry['command']}\n"
         emit('command_output', {'output': prompt, 'session_id': session_id})
         save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
         try:
-            if os.name == 'nt':  # Windows
-                proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-            else:  # Unix
-                proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], preexec_fn=os.setsid)
-            with process_lock:
-                running_processes[session_id]['proc'] = proc
-            for line in proc.stdout:
-                print('[Terminal] Output:', line.strip(), flush=True)
-                entry['output'] += line
-                emit('command_output', {'output': line, 'session_id': session_id})
-                save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
-            proc.wait()
+            # Use PTY for real-time output if possible (Unix or Windows with pywinpty)
+            if os.name != 'nt' and pty is not None:
+                def read_pty(fd):
+                    while True:
+                        try:
+                            data = os.read(fd, 1024)
+                            if not data:
+                                break
+                            text = data.decode(errors='replace')
+                            entry['output'] += text
+                            emit('command_output', {'output': text, 'session_id': session_id})
+                            save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
+                        except OSError:
+                            break
+                pid, fd = pty.fork()
+                if pid == 0:
+                    os.chdir(proc_info['cwd'])
+                    os.execvp('/bin/sh', ['/bin/sh', '-c', command])
+                else:
+                    with process_lock:
+                        running_processes[session_id]['proc'] = None  # PTY, so no proc object
+                    read_pty(fd)
+                    os.close(fd)
+            elif os.name == 'nt' and pywinpty is not None:
+                # Use pywinpty for Windows PTY
+                winpty = pywinpty.PTY()
+                winpty.spawn(command, cwd=proc_info['cwd'])
+                while True:
+                    data = winpty.read(1024)
+                    if not data:
+                        break
+                    text = data.decode(errors='replace') if isinstance(data, bytes) else data
+                    entry['output'] += text
+                    emit('command_output', {'output': text, 'session_id': session_id})
+                    save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
+                winpty.close()
+            else:
+                # Fallback: normal subprocess (may be buffered)
+                if os.name == 'nt':  # Windows
+                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                else:  # Unix
+                    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=proc_info['cwd'], preexec_fn=os.setsid)
+                with process_lock:
+                    running_processes[session_id]['proc'] = proc
+                for line in proc.stdout:
+                    print('[Terminal] Output:', line.strip(), flush=True)
+                    entry['output'] += line
+                    emit('command_output', {'output': line, 'session_id': session_id})
+                    save_session_buffer(session_id, proc_info['output_buffer'], proc_info['cwd'])
+                proc.wait()
         except Exception as e:
             msg = f'Error: {e}\n'
             print('[Terminal] Exception:', e, flush=True)
