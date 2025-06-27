@@ -203,6 +203,10 @@
         const session_id = terminals[idx].session_id;
         delete sessionMap[id];
         localStorage.setItem('terminalSessionMap', JSON.stringify(sessionMap));
+        // Remove from localStorage tab names
+        let nameMap = JSON.parse(localStorage.getItem('terminalTabNames') || '{}');
+        delete nameMap[id];
+        localStorage.setItem('terminalTabNames', JSON.stringify(nameMap));
         // Tell backend to remove session data
         socket.emit('stop_command', { session_id });
         // Remove from terminals array
