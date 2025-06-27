@@ -6,6 +6,8 @@ import subprocess
 import threading
 import signal  # Added for sending SIGINT
 import sys  # Added for platform check
+import time
+import psutil  # Add this new import
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,13 +28,28 @@ def kill_running_process():
         proc = running_process['proc']
         if proc and proc.poll() is None:
             try:
-                if os.name == 'nt':  # Windows
-                    proc.send_signal(signal.CTRL_BREAK_EVENT)
-                else:  # Unix
-                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-            except Exception:
+                parent = psutil.Process(proc.pid)
+                children = parent.children(recursive=True)
+                for child in children:
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                time.sleep(0.5)
+                for child in children:
+                    try:
+                        if child.is_running():
+                            child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                try:
+                    parent.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            except psutil.NoSuchProcess:
                 pass
-            running_process['proc'] = None
+            finally:
+                running_process['proc'] = None
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
@@ -97,8 +114,13 @@ def handle_run_command(data):
 @socketio.on('stop_command')
 def handle_stop_command():
     kill_running_process()
-    emit('output', {'output': '\n[Process stopped]\n'})
+    socketio.emit('output', {'output': '\n[Process stopped]\n'})
     socketio.emit('process_stopped')
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=PORT, allow_unsafe_werkzeug=True)
