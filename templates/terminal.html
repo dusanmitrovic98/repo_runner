@@ -20,6 +20,7 @@
         <div class="flex space-x-2 mb-2">
             <button onclick="window.location.href='/logout'" class="flex-1 bg-gray-700 hover:bg-gray-600 py-2 rounded font-medium">Logout</button>
             <button id="stop-btn" type="button" class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded font-medium" disabled>Stop</button>
+            <button id="clear-history-btn" type="button" class="flex-1 bg-yellow-600 hover:bg-yellow-700 py-2 rounded font-medium">Clear History</button>
         </div>
     </div>
     <script>
@@ -29,7 +30,12 @@
         const outputDiv = document.getElementById('output');
         const runBtn = document.getElementById('run-btn');
         const stopBtn = document.getElementById('stop-btn');
+        const clearHistoryBtn = document.getElementById('clear-history-btn');
         let running = false;
+
+        // Command history
+        let history = [];
+        let historyIndex = -1;
 
         form.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -41,8 +47,11 @@
                 commandInput.value = '';
                 return;
             }
-            // Only display command prompt here, not in backend
-            // outputDiv.innerHTML += `\n$ ${cmd}`;
+            // Add to history
+            if (history.length === 0 || history[history.length - 1] !== cmd) {
+                history.push(cmd);
+            }
+            historyIndex = history.length;
             socket.emit('run_command', { command: cmd });
             commandInput.value = '';
             runBtn.disabled = true;
@@ -50,10 +59,40 @@
             running = true;
         });
 
+        commandInput.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowUp') {
+                if (history.length > 0 && historyIndex > 0) {
+                    historyIndex--;
+                    commandInput.value = history[historyIndex];
+                    // Move cursor to end
+                    setTimeout(() => commandInput.setSelectionRange(commandInput.value.length, commandInput.value.length), 0);
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowDown') {
+                if (history.length > 0 && historyIndex < history.length - 1) {
+                    historyIndex++;
+                    commandInput.value = history[historyIndex];
+                } else if (historyIndex === history.length - 1) {
+                    historyIndex++;
+                    commandInput.value = '';
+                }
+                // Move cursor to end
+                setTimeout(() => commandInput.setSelectionRange(commandInput.value.length, commandInput.value.length), 0);
+                e.preventDefault();
+            }
+        });
+
         stopBtn.addEventListener('click', function() {
             if (running) {
                 socket.emit('stop_command');
             }
+        });
+
+        clearHistoryBtn.addEventListener('click', function() {
+            history = [];
+            historyIndex = -1;
+            commandInput.value = '';
+            commandInput.focus();
         });
 
         socket.on('output', function(data) {
