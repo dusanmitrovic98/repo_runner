@@ -433,4 +433,4 @@ if __name__ == '__main__':
     import eventlet
     import eventlet.wsgi
     # Use eventlet for production server
-    socketio.run(app, host='0.0.0.0', port=PORT, server='eventlet')
+    socketio.run(app, host='0.0.0.0', port=PORT)
