@@ -430,4 +430,7 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=PORT, allow_unsafe_werkzeug=True)
+    import eventlet
+    import eventlet.wsgi
+    # Use eventlet for production server
+    socketio.run(app, host='0.0.0.0', port=PORT, server='eventlet')
