@@ -186,11 +186,12 @@ class DataAccessLayer:
     async def initialize_indexes(self):
         """Create essential database indexes for your project"""
         try:
-            # Index for URLs collection: ensure 'url' is unique
-            await self.db.urls.create_index("url", unique=True)
-            # Index for ping history collection (if you migrate it):
-            # await self.db.ping_history.create_index("url")
-            logger.info("Database indexes initialized for URLs.")
+            # Index for terminal_states collection: ensure 'user_key' is unique
+            await self.db.terminal_states.create_index("user_key", unique=True)
+            # If you use URLs collection, keep the following line:
+            # await self.db.urls.create_index("url", unique=True)
+            # Add more indexes as needed for your project
+            logger.info("Database indexes initialized for terminal_states.")
         except Exception as e:
             logger.error(f"Index initialization failed: {e}")
 
