@@ -54,10 +54,19 @@ class DataAccessLayer:
     async def connect(self):
         """Establish database connection"""
         if self.client is None:
-            self.client = AsyncIOMotorClient(self.mongo_uri)
-            self.db = self.client[self.db_name]
-            logger.info(f"Database connection established (db: {self.db_name})")
-            await self.initialize_indexes()
+            try:
+                self.client = AsyncIOMotorClient(self.mongo_uri)
+                self.db = self.client[self.db_name]
+                logger.info(f"Database connection established (db: {self.db_name})")
+                await self.initialize_indexes()
+            except Exception as e:
+                logger.error(f"Failed to connect to MongoDB: {e}")
+                self.client = None
+                self.db = None
+                raise
+        if self.db is None:
+            logger.error(f"MongoDB database object is None after connection attempt. URI: {self.mongo_uri}, DB: {self.db_name}")
+            raise RuntimeError("MongoDB database object is None after connection attempt.")
     
     async def close(self):
         """Close database connection"""
@@ -79,6 +88,9 @@ class DataAccessLayer:
     async def get(self, collection: str, query: dict, use_cache: bool = True) -> Optional[dict]:
         """Get a single document"""
         await self.connect()
+        if self.db is None:
+            logger.error("MongoDB database object is None in get(). Connection failed or not established.")
+            raise RuntimeError("MongoDB database object is None in get(). Connection failed or not established.")
         
         # Try cache first
         cache_key = f"{collection}:{json.dumps(query, sort_keys=True)}"

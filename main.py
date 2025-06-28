@@ -326,9 +326,7 @@ def get_user_key():
 @app.route('/api/terminal_state', methods=['GET'])
 def api_get_terminal_state():
     user_key = get_user_key()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    state = loop.run_until_complete(db.get("terminal_states", {"user_key": user_key}))
+    state = asyncio.run(db.get("terminal_states", {"user_key": user_key}))
     return jsonify(state or {})
 
 @app.route('/api/terminal_state', methods=['POST'])
@@ -336,9 +334,7 @@ def api_set_terminal_state():
     user_key = get_user_key()
     state = request.json
     state['user_key'] = user_key
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(db.update("terminal_states", {"user_key": user_key}, state, upsert=True))
+    asyncio.run(db.update("terminal_states", {"user_key": user_key}, state, upsert=True))
     return jsonify({"success": True})
 
 @app.route('/logout')
