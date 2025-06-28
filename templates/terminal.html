@@ -66,46 +66,83 @@
     const stopBtn = document.getElementById('stop-btn');
     const clearHistoryBtn = document.getElementById('clear-history-btn');
 
-    function getOrCreateSessionId(tabId) {
-      // Try to get from localStorage, else generate and store
-      let sessionMap = JSON.parse(localStorage.getItem('terminalSessionMap') || '{}');
-      if (!sessionMap[tabId]) {
-        sessionMap[tabId] = tabId + '-' + Math.random().toString(36).substr(2, 9);
-        localStorage.setItem('terminalSessionMap', JSON.stringify(sessionMap));
-      }
-      return sessionMap[tabId];
+    // --- Universal DB-backed terminal state management ---
+    async function fetchTerminalState() {
+      const res = await fetch('/api/terminal_state');
+      return await res.json();
     }
-
-    // Track if a terminal has been restored from buffer
-    function resetRestoredFlags() {
-      terminals.forEach(t => t.restored = false);
-    }
-
-    function saveTabOrder() {
-      const order = terminals.map(t => t.id);
-      localStorage.setItem('terminalTabOrder', JSON.stringify(order));
-    }
-
-    function restoreTabOrder() {
-      const order = JSON.parse(localStorage.getItem('terminalTabOrder') || '[]');
-      if (order.length > 0) {
-        // Reorder terminals array to match saved order
-        terminals.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-      }
-    }
-
-    function saveTabNames() {
-      const nameMap = {};
-      terminals.forEach(t => { nameMap[t.id] = t.name; });
-      localStorage.setItem('terminalTabNames', JSON.stringify(nameMap));
-    }
-
-    function restoreTabNames() {
-      const nameMap = JSON.parse(localStorage.getItem('terminalTabNames') || '{}');
-      terminals.forEach(t => {
-        if (nameMap[t.id]) t.name = nameMap[t.id];
+    async function saveTerminalState() {
+      // Save all tab/session state to backend
+      await fetch('/api/terminal_state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tabs: terminals.map(t => ({ id: t.id, session_id: t.session_id, name: t.name })),
+          tab_order: terminals.map(t => t.id),
+          active_tab_id: activeTerminal ? activeTerminal.id : null
+        })
       });
     }
+
+    function getOrCreateSessionId(tabId) {
+      // Try to get from loaded state, else generate and store
+      let t = terminals.find(t => t.id === tabId);
+      if (t) return t.session_id;
+      return tabId + '-' + Math.random().toString(36).substr(2, 9);
+    }
+
+    function saveTabOrder() { saveTerminalState(); }
+    function saveTabNames() { saveTerminalState(); }
+
+    function restoreTabOrder() {
+      // No-op: handled by backend state
+    }
+    function restoreTabNames() {
+      // No-op: handled by backend state
+    }
+
+    // On page load, restore all terminals from DB
+    window.addEventListener('DOMContentLoaded', async function() {
+      const state = await fetchTerminalState();
+      terminals = [];
+      if (state && state.tabs && state.tabs.length > 0) {
+        for (const tab of state.tabs) {
+          terminals.push({
+            id: tab.id,
+            session_id: tab.session_id,
+            name: tab.name,
+            history: [],
+            historyIndex: -1,
+            output: '',
+            running: false,
+            restored: false
+          });
+        }
+        terminalIdCounter = terminals.length + 1;
+        // Restore order
+        if (state.tab_order && state.tab_order.length > 0) {
+          terminals.sort((a, b) => state.tab_order.indexOf(a.id) - state.tab_order.indexOf(b.id));
+        }
+        // Restore active terminal if present
+        const savedActiveId = state.active_tab_id;
+        const found = terminals.find(t => t.id === savedActiveId);
+        if (found) {
+          setActiveTerminal(savedActiveId);
+          setTimeout(() => commandInput.focus(), 0);
+        } else {
+          setActiveTerminal(terminals[0].id);
+          setTimeout(() => commandInput.focus(), 0);
+        }
+        renderTabs();
+        // Reconnect all sessions ONCE
+        terminals.forEach(t => socket.emit('reconnect_session', { session_id: t.session_id }));
+      } else {
+        // If no terminals, create one and persist as active
+        createTerminal();
+        await saveTerminalState();
+        setTimeout(() => commandInput.focus(), 0);
+      }
+    });
 
     function createTerminal() {
       // Find the lowest available terminal number
@@ -150,63 +187,13 @@
       renderTabs();
       outputDiv.scrollTop = outputDiv.scrollHeight;
       // Persist active terminal id
-      localStorage.setItem('activeTerminalId', id);
+      saveTerminalState();
     }
-
-    // On page load, restore all terminals from localStorage
-    window.addEventListener('DOMContentLoaded', function() {
-      let sessionMap = JSON.parse(localStorage.getItem('terminalSessionMap') || '{}');
-      if (Object.keys(sessionMap).length > 0) {
-        terminals = [];
-        for (const [tabId, session_id] of Object.entries(sessionMap)) {
-          terminals.push({
-            id: tabId,
-            session_id,
-            name: 'Terminal ' + tabId.split('-')[1],
-            history: [],
-            historyIndex: -1,
-            output: '',
-            running: false,
-            restored: false
-          });
-        }
-        terminalIdCounter = terminals.length + 1;
-        restoreTabOrder(); // Restore order before setting active
-        restoreTabNames(); // Restore custom tab names
-        // Restore active terminal if present
-        const savedActiveId = localStorage.getItem('activeTerminalId');
-        const found = terminals.find(t => t.id === savedActiveId);
-        if (found) {
-          setActiveTerminal(savedActiveId);
-          setTimeout(() => commandInput.focus(), 0);
-        } else {
-          setActiveTerminal(terminals[0].id);
-          setTimeout(() => commandInput.focus(), 0);
-        }
-        renderTabs();
-        // Reconnect all sessions ONCE
-        terminals.forEach(t => socket.emit('reconnect_session', { session_id: t.session_id }));
-      } else {
-        // If no terminals, create one and persist as active
-        createTerminal();
-        saveTabOrder();
-        localStorage.setItem('activeTerminalId', terminals[0].id);
-        setTimeout(() => commandInput.focus(), 0);
-      }
-    });
 
     function closeTerminal(id) {
       const idx = terminals.findIndex(t => t.id === id);
       if (idx !== -1) {
-        // Remove from localStorage session map
-        let sessionMap = JSON.parse(localStorage.getItem('terminalSessionMap') || '{}');
         const session_id = terminals[idx].session_id;
-        delete sessionMap[id];
-        localStorage.setItem('terminalSessionMap', JSON.stringify(sessionMap));
-        // Remove from localStorage tab names
-        let nameMap = JSON.parse(localStorage.getItem('terminalTabNames') || '{}');
-        delete nameMap[id];
-        localStorage.setItem('terminalTabNames', JSON.stringify(nameMap));
         // Tell backend to remove session data
         socket.emit('stop_command', { session_id });
         // Remove from terminals array
@@ -228,6 +215,7 @@
             renderTabs();
           }
         }
+        saveTerminalState();
       }
     }
 

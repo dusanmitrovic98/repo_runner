@@ -21,6 +21,9 @@ try:
     import pywinpty  # Windows PTY support
 except ImportError:
     pywinpty = None
+from database import db  # Import your DataAccessLayer
+from flask import jsonify
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv()
@@ -398,6 +401,28 @@ def handle_stop_command(data):
 @socketio.on('send_command')
 def handle_send_command(data):
     handle_run_command(data)
+
+def get_user_key():
+    # Use session cookie or user id; fallback to session.sid if available
+    return session.get('user_id') or session.get('sid') or session.get('logged_in') or 'anon'
+
+@app.route('/api/terminal_state', methods=['GET'])
+def api_get_terminal_state():
+    user_key = get_user_key()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    state = loop.run_until_complete(db.get("terminal_states", {"user_key": user_key}))
+    return jsonify(state or {})
+
+@app.route('/api/terminal_state', methods=['POST'])
+def api_set_terminal_state():
+    user_key = get_user_key()
+    state = request.json
+    state['user_key'] = user_key
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(db.update("terminal_states", {"user_key": user_key}, state, upsert=True))
+    return jsonify({"success": True})
 
 @app.route('/logout')
 def logout():
